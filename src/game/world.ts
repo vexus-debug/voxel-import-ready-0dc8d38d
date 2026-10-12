@@ -164,7 +164,11 @@ export class World {
           if (h === WATER_LEVEL - 1 && rr < 0.45) c[idx(x, h + 1, z)] = B.REED;
           continue;
         }
-        if (top === B.SAND && h <= WATER_LEVEL + 2 && kind !== 1 ? rr < 0.25 : top === B.SAND && h <= WATER_LEVEL + 1 && rr < 0.35) { c[idx(x, h + 1, z)] = B.REED; continue; }
+        if (top === B.SAND && h <= WATER_LEVEL + 2) {
+          // reeds only on banks that actually touch water
+          const wet = [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dz]) => this.height(wx + dx, wz + dz) < WATER_LEVEL);
+          if (wet && rr < 0.4) { c[idx(x, h + 1, z)] = B.REED; continue; }
+        }
         if (top === B.GRASS) {
           const meadow = fbm(wx / 28, wz / 28, this.seed + 81, 3);
           const dens = meadow > 0.55 ? 0.8 : meadow > 0.45 ? 0.25 : 0.04;
@@ -314,8 +318,22 @@ export class World {
   }
 
   surface(x: number, z: number) {
-    for (let y = H - 1; y > 0; y--) if (this.get(x, y, z) !== 0) return y + 1;
+    for (let y = H - 1; y > 0; y--) { const id = this.get(x, y, z); if (id !== 0 && !isPlant(id)) return y + 1; }
     return H;
+  }
+  /** nearest dry, walkable column to (x,z), spiralling outward */
+  findDry(x: number, z: number): [number, number, number] {
+    for (let r = 0; r < 200; r += 2)
+      for (let a = 0; a < Math.max(1, r * 3); a++) {
+        const t = (a / Math.max(1, r * 3)) * Math.PI * 2;
+        const px = Math.round(x + Math.cos(t) * r), pz = Math.round(z + Math.sin(t) * r);
+        const y = this.surface(px, pz);
+        const below = this.get(px, y - 1, pz);
+        if (below === B.WATER || below === B.LEAVES || below === B.LOG || y <= WATER_LEVEL + 1) continue;
+        if (!isPassable(this.get(px, y, pz)) || !isPassable(this.get(px, y + 1, pz))) continue;
+        return [px, y, pz];
+      }
+    return [x, this.surface(x, z), z];
   }
 }
 
