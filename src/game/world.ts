@@ -369,6 +369,26 @@ function smoothOffset(world: World, X: number, Y: number, Z: number, out: number
   out[0] = sx * k; out[1] = sy * k; out[2] = sz * k;
 }
 
+/** Organic tree shapes: round off logs and leaf clumps using only same-kind neighbours. */
+function treeOffset(world: World, X: number, Y: number, Z: number, id: number, out: number[]) {
+  let cnt = 0, sx = 0, sy = 0, sz = 0;
+  for (let dy = -1; dy <= 0; dy++)
+    for (let dz = -1; dz <= 0; dz++)
+      for (let dx = -1; dx <= 0; dx++) {
+        const n = world.get(X + dx, Y + dy, Z + dz);
+        if (n !== id) continue;
+        cnt++; sx += dx + 0.5; sy += dy + 0.5; sz += dz + 0.5;
+      }
+  if (cnt === 0 || cnt === 8) { out[0] = out[1] = out[2] = 0; return; }
+  // logs: round horizontally only so trunks stay connected vertically
+  const k = ((4 - cnt) / 4) / cnt * (id === B.LOG ? 0.6 : 0.9);
+  out[0] = sx * k; out[1] = id === B.LOG ? 0 : sy * k; out[2] = sz * k;
+  if (id === B.LEAVES) {
+    const q = X * 73856093 ^ Y * 19349663 ^ Z * 83492791;
+    out[0] += (hash2(q, 1, 3) - 0.5) * 0.35; out[1] += (hash2(q, 2, 3) - 0.5) * 0.35; out[2] += (hash2(q, 3, 3) - 0.5) * 0.35;
+  }
+}
+
 export function buildChunkGeometry(world: World, cx: number, cz: number) {
   const chunk = world.getChunk(cx, cz);
   const pos: number[] = [], uv: number[] = [], col: number[] = [], ind: number[] = [];
