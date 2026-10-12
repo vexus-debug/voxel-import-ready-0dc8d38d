@@ -2,9 +2,9 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { PointerLockControls } from "@react-three/drei";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
-import { BLOCKS, HOTBAR, drawAtlas } from "./blocks";
+import { B, BLOCKS, HOTBAR, drawAtlas } from "./blocks";
 import { CH, buildChunkGeometry, moveEntity, raycast, collides, type World } from "./world";
-import { damage, emit, emitThrottled, getGame, saveGame, ui, MAX_HEALTH, type Zombie } from "./state";
+import { cloudU, damage, emit, emitThrottled, getGame, saveGame, ui, MAX_HEALTH, type Zombie } from "./state";
 import { HUD } from "./HUD";
 import { touch, isTouchDevice } from "./touch";
 import { TouchControls } from "./TouchControls";
@@ -45,9 +45,10 @@ function ChunkMesh({ cx, cz, world, material }: { cx: number; cz: number; world:
 
 function Chunks({ material }: { material: THREE.Material }) {
   const g = getGame();
+  const { camera } = useThree();
   const [center, setCenter] = useState(() => [Math.floor(g.pos.x / CH), Math.floor(g.pos.z / CH)]);
   useFrame(() => {
-    const cx = Math.floor(g.pos.x / CH), cz = Math.floor(g.pos.z / CH);
+    const cx = Math.floor(camera.position.x / CH), cz = Math.floor(camera.position.z / CH);
     if (cx !== center[0] || cz !== center[1]) setCenter([cx, cz]);
   });
   const list = useMemo(() => {
@@ -66,7 +67,7 @@ function Chunks({ material }: { material: THREE.Material }) {
 }
 
 function Sky() {
-  const { scene } = useThree();
+  const { scene, camera } = useThree();
   const amb = useRef<THREE.HemisphereLight>(null);
   const sun = useRef<THREE.DirectionalLight>(null);
   const sunMesh = useRef<THREE.Mesh>(null);
@@ -77,6 +78,7 @@ function Sky() {
   const dusk = useMemo(() => new THREE.Color("#e8854a"), []);
   const night = useMemo(() => new THREE.Color("#120a2a"), []);
   const col = useMemo(() => new THREE.Color(), []);
+  const uwCol = useMemo(() => new THREE.Color(), []);
   const acc = useRef(0);
   useFrame((_, delta) => {
     const g = getGame();
@@ -87,8 +89,17 @@ function Sky() {
     const light = THREE.MathUtils.smoothstep(sy, -0.2, 0.3);
     const duskAmt = Math.max(0, 1 - Math.abs(sy) * 4) * 0.6;
     col.copy(night).lerp(day, light).lerp(dusk, duskAmt * light + duskAmt * 0.3);
-    scene.background = col;
-    if (scene.fog) (scene.fog as THREE.Fog).color.copy(col);
+    cloudU.cloudT.value += dt;
+    cloudU.cloudDay.value = light;
+    const fog = scene.fog as THREE.Fog | null;
+    if (ui.underwater) {
+      uwCol.set("#1b6a86").multiplyScalar(0.25 + 0.75 * light);
+      scene.background = uwCol;
+      if (fog) { fog.color.copy(uwCol); fog.near = 0.3; fog.far = 16; }
+    } else {
+      scene.background = col;
+      if (fog) { fog.color.copy(col); fog.near = 18; fog.far = RADIUS * CH - 4; }
+    }
     const moon = 1 - light;
     if (amb.current) {
       amb.current.intensity = 0.25 + 0.55 * light + 0.2 * moon;
@@ -109,7 +120,8 @@ function Sky() {
         s.color.setRGB(1, 0.7 + 0.22 * Math.min(1, sy * 2), 0.45 + 0.3 * Math.min(1, sy * 2));
       }
       // snap to texel-ish grid to reduce shadow shimmer while walking
-      const px = Math.round(g.pos.x), py = Math.round(g.pos.y), pz = Math.round(g.pos.z);
+      const cp = camera.position;
+      const px = Math.round(cp.x), py = Math.round(cp.y - 1.6), pz = Math.round(cp.z);
       s.position.set(px + lx * 40, py + Math.max(ly, 0.15) * 50, pz + 15);
       s.target.position.set(px, py, pz);
       s.target.updateMatrixWorld();
@@ -117,7 +129,7 @@ function Sky() {
     }
     // sky dome follows the camera; sun & moon are drawn as round discs with glow in its shader
     if (sunMesh.current) {
-      sunMesh.current.position.set(g.pos.x, g.pos.y + 1.62, g.pos.z);
+      sunMesh.current.position.copy(camera.position);
       const u = skyMat.uniforms as any;
       u.sunDir.value.set(Math.cos(a), sy, 0.25).normalize();
       zen.copy(night).lerp(zenDay, light).lerp(dusk, duskAmt * light * 0.35);
@@ -171,19 +183,6 @@ function Sky() {
             vec3 g = floor(d*400.0);
             float star = step(0.9975, h(g)) * night * smoothstep(0.0, 0.3, d.y);
             c += vec3(star);
-            // drifting cumulus clouds projected on a high plane
-            if (d.y > 0.0) {
-              vec2 cp = d.xz / (d.y + 0.08) * 1.6 + vec2(time * 0.012, time * 0.005);
-              float f = fbm(cp);
-              float cov = smoothstep(0.48, 0.72, f);
-              float under = fbm(cp + sunDir.xz * 0.06);
-              float lit = clamp(0.75 + (f - under) * 3.0, 0.45, 1.15);
-              vec3 dayCloud = mix(vec3(0.72,0.76,0.84), vec3(1.0), lit);
-              dayCloud = mix(dayCloud, dayCloud * sunCol, 0.25);
-              vec3 cc = mix(dayCloud, vec3(0.12,0.13,0.2), night);
-              float fade = smoothstep(0.0, 0.18, d.y);
-              c = mix(c, cc, cov * fade * 0.95);
-            }
             gl_FragColor = vec4(c, 1.0);
           }`,
       }),
@@ -352,6 +351,8 @@ function Player({ zt }: { zt: React.MutableRefObject<ZombieTarget> }) {
         }
       }
       if (e.code === "Space" && ui.locked) e.preventDefault();
+      if (e.code === "KeyP" && ui.locked && !ui.dead) { ui.photo = !ui.photo; if (!ui.photo) ui.hideHud = false; emit(); }
+      if (e.code === "KeyH" && ui.photo) { ui.hideHud = !ui.hideHud; emit(); }
     };
     const ku = (e: KeyboardEvent) => (keys.current[e.code] = false);
     const primary = () => {
@@ -452,6 +453,33 @@ function Player({ zt }: { zt: React.MutableRefObject<ZombieTarget> }) {
       touch.lookDX = touch.lookDY = 0;
     }
 
+    // free-fly photo mode: camera detaches from the player body
+    if (ui.photo) {
+      camera.getWorldDirection(dir);
+      const r = new THREE.Vector3(-dir.z, 0, dir.x).normalize();
+      const mv = new THREE.Vector3();
+      if (active) {
+        if (k["KeyW"]) mv.add(dir);
+        if (k["KeyS"]) mv.sub(dir);
+        if (k["KeyD"]) mv.add(r);
+        if (k["KeyA"]) mv.sub(r);
+        if (k["Space"] || k["KeyE"] || touch.jump) mv.y += 1;
+        if (k["KeyQ"] || k["ControlLeft"]) mv.y -= 1;
+        if (touch.moveX || touch.moveY) mv.addScaledVector(dir, touch.moveY).addScaledVector(r, touch.moveX);
+      }
+      camera.position.addScaledVector(mv, (k["ShiftLeft"] || touch.sprint ? 30 : 10) * dt);
+      camera.position.y = Math.max(-5, Math.min(140, camera.position.y));
+      if (highlight.current) highlight.current.visible = false;
+      g.vel.set(0, 0, 0);
+      fallStart.current = null;
+      const uw = g.world.get(Math.floor(camera.position.x), Math.floor(camera.position.y), Math.floor(camera.position.z)) === B.WATER;
+      if (uw !== ui.underwater) { ui.underwater = uw; emit(); }
+      return;
+    }
+
+    // swimming
+    const inWater = g.world.get(Math.floor(g.pos.x), Math.floor(g.pos.y + 0.5), Math.floor(g.pos.z)) === B.WATER;
+
     // movement
     camera.getWorldDirection(dir);
     const fwd = new THREE.Vector3(dir.x, 0, dir.z).normalize();
@@ -465,13 +493,22 @@ function Player({ zt }: { zt: React.MutableRefObject<ZombieTarget> }) {
       if (touch.moveX || touch.moveY) wish.addScaledVector(fwd, touch.moveY).addScaledVector(right, touch.moveX);
     }
     const mag = Math.min(1, wish.length());
-    if (mag > 0.05) wish.normalize().multiplyScalar((k["ShiftLeft"] || touch.sprint ? 6.2 : 4.3) * (touch.enabled ? mag : 1));
+    if (mag > 0.05) wish.normalize().multiplyScalar((k["ShiftLeft"] || touch.sprint ? 6.2 : 4.3) * (touch.enabled ? mag : 1) * (inWater ? 0.55 : 1));
     else wish.set(0, 0, 0);
-    const blend = 1 - Math.exp(-(onGround.current ? 14 : 3) * dt);
+    const blend = 1 - Math.exp(-(onGround.current || inWater ? 14 : 3) * dt);
     g.vel.x += (wish.x - g.vel.x) * blend;
     g.vel.z += (wish.z - g.vel.z) * blend;
-    if (active && (k["Space"] || touch.jump) && onGround.current) g.vel.y = 8.6;
-    g.vel.y = Math.max(-50, g.vel.y - 28 * dt);
+    const jumpHeld = active && (k["Space"] || touch.jump);
+    if (inWater) {
+      // buoyant: slow sinking, drag, hold jump to swim up
+      g.vel.y *= Math.exp(-3 * dt);
+      g.vel.y = Math.max(-2.5, g.vel.y - 5 * dt);
+      if (jumpHeld) g.vel.y = Math.min(3.2, g.vel.y + 18 * dt);
+      fallStart.current = null;
+    } else {
+      if (jumpHeld && onGround.current) g.vel.y = 8.6;
+      g.vel.y = Math.max(-50, g.vel.y - 28 * dt);
+    }
     const res = moveEntity(g.world, g.pos, g.vel, dt, 0.3, 1.8, true);
     onGround.current = res.onGround;
 
@@ -506,6 +543,8 @@ function Player({ zt }: { zt: React.MutableRefObject<ZombieTarget> }) {
     const bobAmt = res.onGround ? Math.min(1, speedH / 5) : 0;
     const bob = Math.sin(bobT.current * 2) * 0.05 * bobAmt;
     camera.position.set(g.pos.x, g.pos.y + 1.62 + eyeOff.current + bob, g.pos.z);
+    const uw = g.world.get(Math.floor(camera.position.x), Math.floor(camera.position.y), Math.floor(camera.position.z)) === B.WATER;
+    if (uw !== ui.underwater) { ui.underwater = uw; emit(); }
 
     // targeting
     const t = raycast(g.world, camera.position, dir, REACH);
@@ -581,17 +620,79 @@ function Scene() {
     tex.minFilter = THREE.NearestFilter;
     tex.colorSpace = THREE.SRGBColorSpace;
     const solid = new THREE.MeshLambertMaterial({ map: tex, vertexColors: true, alphaTest: 0.5 });
+    addCloudShadows(solid);
     const water = new THREE.MeshLambertMaterial({ map: tex, vertexColors: true, transparent: true, opacity: 0.72, depthWrite: false, side: THREE.DoubleSide });
+    addCloudShadows(water);
     return [solid, water] as unknown as THREE.Material;
   }, []);
   return (
     <>
       <Sky />
+      <Clouds />
       <Chunks material={material} />
       <Player zt={zt} />
       <Zombies target={zt} />
     </>
   );
+}
+
+// Drifting cloud shadows: same wind as the 3D clouds, sampled from a soft noise field.
+const CLOUD_GLSL = `
+uniform float cloudT, cloudDay; varying vec3 vCW;
+float cH(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
+float cN(vec2 p){ vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);
+  return mix(mix(cH(i),cH(i+vec2(1,0)),f.x), mix(cH(i+vec2(0,1)),cH(i+vec2(1,1)),f.x), f.y); }
+float cloudShade(vec2 p){ p = (p - vec2(cloudT*${'$'}{WIND_X.toFixed(2)}, cloudT*${'$'}{WIND_Z.toFixed(2)})) / 38.0;
+  float n = cN(p)*0.6 + cN(p*2.1+5.3)*0.3 + cN(p*4.3+1.7)*0.1; return smoothstep(0.5, 0.68, n); }
+`;
+function addCloudShadows(m: THREE.Material) {
+  m.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, cloudU);
+    sh.vertexShader = "varying vec3 vCW;\n" + sh.vertexShader.replace("#include <project_vertex>", "#include <project_vertex>\nvCW = (modelMatrix * vec4(transformed, 1.0)).xyz;");
+    sh.fragmentShader = CLOUD_GLSL + sh.fragmentShader.replace(
+      "#include <dithering_fragment>",
+      "gl_FragColor.rgb *= 1.0 - cloudShade(vCW.xz) * 0.32 * cloudDay;\n#include <dithering_fragment>",
+    );
+  };
+}
+
+const WIND_X = 2.2, WIND_Z = 0.9; // blocks per second
+const CLOUD_TILE = 520;
+function Clouds() {
+  const { camera } = useThree();
+  const ref = useRef<THREE.InstancedMesh>(null);
+  const puffs = useMemo(() => {
+    const out: { x: number; y: number; z: number; s: number; sy: number }[] = [];
+    let r = 12345;
+    const rnd = () => ((r = (r * 16807) % 2147483647) / 2147483647);
+    for (let c = 0; c < 34; c++) {
+      const cx = rnd() * CLOUD_TILE, cz = rnd() * CLOUD_TILE, cy = 82 + rnd() * 14;
+      const n = 6 + Math.floor(rnd() * 6), w = 10 + rnd() * 14;
+      for (let i = 0; i < n; i++) {
+        const s = 5 + rnd() * 7;
+        out.push({ x: cx + (rnd() - 0.5) * w * 2, y: cy + rnd() * 4 + (i < 2 ? 3 : 0), z: cz + (rnd() - 0.5) * w, s, sy: s * (0.55 + rnd() * 0.25) });
+      }
+    }
+    return out;
+  }, []);
+  const mat = useMemo(() => new THREE.MeshLambertMaterial({ color: "#ffffff", emissive: "#9aa7b8", emissiveIntensity: 0.55, fog: false }), []);
+  const geo = useMemo(() => new THREE.IcosahedronGeometry(1, 2), []);
+  const m4 = useMemo(() => new THREE.Matrix4(), []);
+  useFrame(() => {
+    if (!ref.current) return;
+    const t = cloudU.cloudT.value, day = cloudU.cloudDay.value;
+    mat.color.setScalar(0.15 + 0.85 * day);
+    mat.emissiveIntensity = 0.1 + 0.45 * day;
+    const cx = camera.position.x, cz = camera.position.z, half = CLOUD_TILE / 2;
+    const wrap = (v: number) => ((v % CLOUD_TILE) + CLOUD_TILE) % CLOUD_TILE - half;
+    puffs.forEach((p, i) => {
+      const x = cx + wrap(p.x + t * WIND_X - cx), z = cz + wrap(p.z + t * WIND_Z - cz);
+      m4.makeScale(p.s, p.sy, p.s).setPosition(x, p.y, z);
+      ref.current!.setMatrixAt(i, m4);
+    });
+    ref.current.instanceMatrix.needsUpdate = true;
+  });
+  return <instancedMesh ref={ref} args={[geo, mat, puffs.length]} frustumCulled={false} />;
 }
 
 // Tracks viewport size; when the screen is portrait the game is rendered

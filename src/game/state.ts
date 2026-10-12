@@ -17,7 +17,13 @@ export const ui = {
   hurt: 0,
   atlasUrl: "",
   lastSaved: 0,
+  underwater: false,
+  photo: false,
+  hideHud: false,
 };
+
+/** shared shader uniforms for drifting cloud shadows on the terrain */
+export const cloudU = { cloudT: { value: 0 }, cloudDay: { value: 1 } };
 
 let version = 0;
 const listeners = new Set<() => void>();
