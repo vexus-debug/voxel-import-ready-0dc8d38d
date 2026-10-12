@@ -2,9 +2,9 @@ import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { PointerLockControls } from "@react-three/drei";
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
-import { BLOCKS, HOTBAR, drawAtlas } from "./blocks";
+import { B, BLOCKS, HOTBAR, drawAtlas } from "./blocks";
 import { CH, buildChunkGeometry, moveEntity, raycast, collides, type World } from "./world";
-import { damage, emit, emitThrottled, getGame, saveGame, ui, MAX_HEALTH, type Zombie } from "./state";
+import { cloudU, damage, emit, emitThrottled, getGame, saveGame, ui, MAX_HEALTH, type Zombie } from "./state";
 import { HUD } from "./HUD";
 import { touch, isTouchDevice } from "./touch";
 import { TouchControls } from "./TouchControls";
@@ -77,6 +77,7 @@ function Sky() {
   const dusk = useMemo(() => new THREE.Color("#e8854a"), []);
   const night = useMemo(() => new THREE.Color("#120a2a"), []);
   const col = useMemo(() => new THREE.Color(), []);
+  const uwCol = useMemo(() => new THREE.Color(), []);
   const acc = useRef(0);
   useFrame((_, delta) => {
     const g = getGame();
@@ -87,8 +88,17 @@ function Sky() {
     const light = THREE.MathUtils.smoothstep(sy, -0.2, 0.3);
     const duskAmt = Math.max(0, 1 - Math.abs(sy) * 4) * 0.6;
     col.copy(night).lerp(day, light).lerp(dusk, duskAmt * light + duskAmt * 0.3);
-    scene.background = col;
-    if (scene.fog) (scene.fog as THREE.Fog).color.copy(col);
+    cloudU.cloudT.value += dt;
+    cloudU.cloudDay.value = light;
+    const fog = scene.fog as THREE.Fog | null;
+    if (ui.underwater) {
+      uwCol.set("#1b6a86").multiplyScalar(0.25 + 0.75 * light);
+      scene.background = uwCol;
+      if (fog) { fog.color.copy(uwCol); fog.near = 0.3; fog.far = 16; }
+    } else {
+      scene.background = col;
+      if (fog) { fog.color.copy(col); fog.near = 18; fog.far = RADIUS * CH - 4; }
+    }
     const moon = 1 - light;
     if (amb.current) {
       amb.current.intensity = 0.25 + 0.55 * light + 0.2 * moon;
@@ -171,19 +181,6 @@ function Sky() {
             vec3 g = floor(d*400.0);
             float star = step(0.9975, h(g)) * night * smoothstep(0.0, 0.3, d.y);
             c += vec3(star);
-            // drifting cumulus clouds projected on a high plane
-            if (d.y > 0.0) {
-              vec2 cp = d.xz / (d.y + 0.08) * 1.6 + vec2(time * 0.012, time * 0.005);
-              float f = fbm(cp);
-              float cov = smoothstep(0.48, 0.72, f);
-              float under = fbm(cp + sunDir.xz * 0.06);
-              float lit = clamp(0.75 + (f - under) * 3.0, 0.45, 1.15);
-              vec3 dayCloud = mix(vec3(0.72,0.76,0.84), vec3(1.0), lit);
-              dayCloud = mix(dayCloud, dayCloud * sunCol, 0.25);
-              vec3 cc = mix(dayCloud, vec3(0.12,0.13,0.2), night);
-              float fade = smoothstep(0.0, 0.18, d.y);
-              c = mix(c, cc, cov * fade * 0.95);
-            }
             gl_FragColor = vec4(c, 1.0);
           }`,
       }),
