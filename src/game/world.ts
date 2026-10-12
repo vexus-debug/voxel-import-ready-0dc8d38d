@@ -391,7 +391,7 @@ function treeOffset(world: World, X: number, Y: number, Z: number, id: number, o
 
 export function buildChunkGeometry(world: World, cx: number, cz: number) {
   const chunk = world.getChunk(cx, cz);
-  const pos: number[] = [], uv: number[] = [], col: number[] = [], ind: number[] = [];
+  const pos: number[] = [], uv: number[] = [], col: number[] = [], ind: number[] = [], wind: number[] = [];
   const ox = cx * CH, oz = cz * CH;
   const eps = 0.001;
   const off = [0, 0, 0];
@@ -407,10 +407,12 @@ export function buildChunkGeometry(world: World, cx: number, cz: number) {
         if (!id) continue;
         const def = BLOCKS[id];
         const wx = ox + x, wz = oz + z;
-        if (id === B.TALLGRASS) {
+        if (isPlant(id)) {
           // two crossed double-sided blades
+          const ptile = def.tiles[0];
           const j = (hash2(wx, wz, 5) - 0.5) * 0.3, j2 = (hash2(wx, wz, 9) - 0.5) * 0.3;
-          const sc = 0.8 + hash2(wx, wz, 13) * 0.45;
+          const hBase = id === B.REED ? 1.4 : id === B.FLOWER ? 0.6 : id === B.ALOE ? 0.7 : id === B.FERN ? 0.85 : 0.8;
+          const sc = hBase + hash2(wx, wz, 13) * (id === B.REED ? 0.6 : 0.4);
           const quads = [[[0.1, 0.1], [0.9, 0.9]], [[0.1, 0.9], [0.9, 0.1]]];
           for (const [[ax, az], [bx, bz]] of quads) {
             for (let side = 0; side < 2; side++) {
