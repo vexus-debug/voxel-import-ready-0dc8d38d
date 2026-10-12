@@ -419,7 +419,7 @@ export function buildChunkGeometry(world: World, cx: number, cz: number) {
               // separate vertices per side so normals don't cancel out (dark blades)
               const base = pos.length / 3;
               pos.push(wx + ax + j, y, wz + az + j2, wx + bx + j, y, wz + bz + j2, wx + ax + j, y + sc, wz + az + j2, wx + bx + j, y + sc, wz + bz + j2);
-              tileUV(16, 0, 0); tileUV(16, 1, 0); tileUV(16, 0, 1); tileUV(16, 1, 1);
+              tileUV(ptile, 0, 0); tileUV(ptile, 1, 0); tileUV(ptile, 0, 1); tileUV(ptile, 1, 1);
               for (const l of [0.75, 0.75, 1.1, 1.1]) col.push(l, l, l);
               if (side) ind.push(base, base + 2, base + 1, base + 2, base + 3, base + 1);
               else ind.push(base, base + 1, base + 2, base + 2, base + 1, base + 3);
@@ -472,27 +472,35 @@ export function buildChunkGeometry(world: World, cx: number, cz: number) {
             ao.push(AO[occ]);
           }
           let k = 0;
+          const isWater = id === B.WATER;
+          const sink = isWater && (y + 1 >= H || world.get(wx, y + 1, wz) !== B.WATER) ? 0.12 : 0;
+          const tree = id === B.LOG || id === B.LEAVES;
           for (const c of F.c) {
             const X = ox + x + c[0], Y = y + c[1], Z = oz + z + c[2];
-            if (nat) smoothOffset(world, X, Y, Z, off); else off[0] = off[1] = off[2] = 0;
-            pos.push(X + off[0], Y + off[1], Z + off[2]);
+            if (nat) smoothOffset(world, X, Y, Z, off);
+            else if (tree) treeOffset(world, X, Y, Z, id, off);
+            else off[0] = off[1] = off[2] = 0;
+            pos.push(X + off[0], Y + off[1] - (c[1] ? sink : 0), Z + off[2]);
             const u = (tc + (c[3] ? 1 - eps : eps)) / ATLAS_COLS;
             const v = 1 - (tr + 1 - (c[4] ? 1 - eps : eps)) / ATLAS_COLS;
             uv.push(u, v);
             // foliage scatters light through itself, so its undersides never go pitch black
-            const l = id === B.LEAVES ? 0.9 + 0.1 * F.s * ao[k++] + 0.25 : (0.82 + 0.18 * F.s) * ao[k++];
+            const l = isWater ? 1 : id === B.LEAVES ? 0.9 + 0.1 * F.s * ao[k++] + 0.25 : (0.82 + 0.18 * F.s) * ao[k++];
             col.push(l, l, l);
           }
+          const out = isWater ? wind : ind;
           // flip quad diagonal to avoid anisotropic AO artifacts
-          if (ao[0] + ao[3] < ao[1] + ao[2]) ind.push(base, base + 1, base + 3, base, base + 3, base + 2);
-          else ind.push(base, base + 1, base + 2, base + 2, base + 1, base + 3);
+          if (!isWater && ao[0] + ao[3] < ao[1] + ao[2]) out.push(base, base + 1, base + 3, base, base + 3, base + 2);
+          else out.push(base, base + 1, base + 2, base + 2, base + 1, base + 3);
         }
       }
   const g = new THREE.BufferGeometry();
   g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
   g.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
-  g.setIndex(ind);
+  g.setIndex(ind.concat(wind));
+  g.addGroup(0, ind.length, 0);
+  g.addGroup(ind.length, wind.length, 1);
   g.computeVertexNormals();
   g.computeBoundingSphere();
   return g;
