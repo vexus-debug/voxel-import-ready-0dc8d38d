@@ -580,7 +580,9 @@ function Scene() {
     tex.magFilter = THREE.NearestFilter;
     tex.minFilter = THREE.NearestFilter;
     tex.colorSpace = THREE.SRGBColorSpace;
-    return new THREE.MeshLambertMaterial({ map: tex, vertexColors: true, alphaTest: 0.5 });
+    const solid = new THREE.MeshLambertMaterial({ map: tex, vertexColors: true, alphaTest: 0.5 });
+    const water = new THREE.MeshLambertMaterial({ map: tex, vertexColors: true, transparent: true, opacity: 0.72, depthWrite: false, side: THREE.DoubleSide });
+    return [solid, water] as unknown as THREE.Material;
   }, []);
   return (
     <>
