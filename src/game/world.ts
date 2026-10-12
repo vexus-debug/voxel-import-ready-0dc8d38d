@@ -164,7 +164,11 @@ export class World {
           if (h === WATER_LEVEL - 1 && rr < 0.45) c[idx(x, h + 1, z)] = B.REED;
           continue;
         }
-        if (top === B.SAND && h <= WATER_LEVEL + 2 && kind !== 1 ? rr < 0.25 : top === B.SAND && h <= WATER_LEVEL + 1 && rr < 0.35) { c[idx(x, h + 1, z)] = B.REED; continue; }
+        if (top === B.SAND && h <= WATER_LEVEL + 2) {
+          // reeds only on banks that actually touch water
+          const wet = [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dz]) => this.height(wx + dx, wz + dz) < WATER_LEVEL);
+          if (wet && rr < 0.4) { c[idx(x, h + 1, z)] = B.REED; continue; }
+        }
         if (top === B.GRASS) {
           const meadow = fbm(wx / 28, wz / 28, this.seed + 81, 3);
           const dens = meadow > 0.55 ? 0.8 : meadow > 0.45 ? 0.25 : 0.04;
@@ -314,8 +318,22 @@ export class World {
   }
 
   surface(x: number, z: number) {
-    for (let y = H - 1; y > 0; y--) if (this.get(x, y, z) !== 0) return y + 1;
+    for (let y = H - 1; y > 0; y--) { const id = this.get(x, y, z); if (id !== 0 && !isPlant(id)) return y + 1; }
     return H;
+  }
+  /** nearest dry, walkable column to (x,z), spiralling outward */
+  findDry(x: number, z: number): [number, number, number] {
+    for (let r = 0; r < 200; r += 2)
+      for (let a = 0; a < Math.max(1, r * 3); a++) {
+        const t = (a / Math.max(1, r * 3)) * Math.PI * 2;
+        const px = Math.round(x + Math.cos(t) * r), pz = Math.round(z + Math.sin(t) * r);
+        const y = this.surface(px, pz);
+        const below = this.get(px, y - 1, pz);
+        if (below === B.WATER || below === B.LEAVES || below === B.LOG || y <= WATER_LEVEL + 1) continue;
+        if (!isPassable(this.get(px, y, pz)) || !isPassable(this.get(px, y + 1, pz))) continue;
+        return [px, y, pz];
+      }
+    return [x, this.surface(x, z), z];
   }
 }
 
@@ -351,9 +369,29 @@ function smoothOffset(world: World, X: number, Y: number, Z: number, out: number
   out[0] = sx * k; out[1] = sy * k; out[2] = sz * k;
 }
 
+/** Organic tree shapes: round off logs and leaf clumps using only same-kind neighbours. */
+function treeOffset(world: World, X: number, Y: number, Z: number, id: number, out: number[]) {
+  let cnt = 0, sx = 0, sy = 0, sz = 0;
+  for (let dy = -1; dy <= 0; dy++)
+    for (let dz = -1; dz <= 0; dz++)
+      for (let dx = -1; dx <= 0; dx++) {
+        const n = world.get(X + dx, Y + dy, Z + dz);
+        if (n !== id) continue;
+        cnt++; sx += dx + 0.5; sy += dy + 0.5; sz += dz + 0.5;
+      }
+  if (cnt === 0 || cnt === 8) { out[0] = out[1] = out[2] = 0; return; }
+  // logs: round horizontally only so trunks stay connected vertically
+  const k = ((4 - cnt) / 4) / cnt * (id === B.LOG ? 0.6 : 0.9);
+  out[0] = sx * k; out[1] = id === B.LOG ? 0 : sy * k; out[2] = sz * k;
+  if (id === B.LEAVES) {
+    const q = X * 73856093 ^ Y * 19349663 ^ Z * 83492791;
+    out[0] += (hash2(q, 1, 3) - 0.5) * 0.35; out[1] += (hash2(q, 2, 3) - 0.5) * 0.35; out[2] += (hash2(q, 3, 3) - 0.5) * 0.35;
+  }
+}
+
 export function buildChunkGeometry(world: World, cx: number, cz: number) {
   const chunk = world.getChunk(cx, cz);
-  const pos: number[] = [], uv: number[] = [], col: number[] = [], ind: number[] = [];
+  const pos: number[] = [], uv: number[] = [], col: number[] = [], ind: number[] = [], wind: number[] = [];
   const ox = cx * CH, oz = cz * CH;
   const eps = 0.001;
   const off = [0, 0, 0];
@@ -369,17 +407,19 @@ export function buildChunkGeometry(world: World, cx: number, cz: number) {
         if (!id) continue;
         const def = BLOCKS[id];
         const wx = ox + x, wz = oz + z;
-        if (id === B.TALLGRASS) {
+        if (isPlant(id)) {
           // two crossed double-sided blades
+          const ptile = def.tiles[0];
           const j = (hash2(wx, wz, 5) - 0.5) * 0.3, j2 = (hash2(wx, wz, 9) - 0.5) * 0.3;
-          const sc = 0.8 + hash2(wx, wz, 13) * 0.45;
+          const hBase = id === B.REED ? 1.4 : id === B.FLOWER ? 0.6 : id === B.ALOE ? 0.7 : id === B.FERN ? 0.85 : 0.8;
+          const sc = hBase + hash2(wx, wz, 13) * (id === B.REED ? 0.6 : 0.4);
           const quads = [[[0.1, 0.1], [0.9, 0.9]], [[0.1, 0.9], [0.9, 0.1]]];
           for (const [[ax, az], [bx, bz]] of quads) {
             for (let side = 0; side < 2; side++) {
               // separate vertices per side so normals don't cancel out (dark blades)
               const base = pos.length / 3;
               pos.push(wx + ax + j, y, wz + az + j2, wx + bx + j, y, wz + bz + j2, wx + ax + j, y + sc, wz + az + j2, wx + bx + j, y + sc, wz + bz + j2);
-              tileUV(16, 0, 0); tileUV(16, 1, 0); tileUV(16, 0, 1); tileUV(16, 1, 1);
+              tileUV(ptile, 0, 0); tileUV(ptile, 1, 0); tileUV(ptile, 0, 1); tileUV(ptile, 1, 1);
               for (const l of [0.75, 0.75, 1.1, 1.1]) col.push(l, l, l);
               if (side) ind.push(base, base + 2, base + 1, base + 2, base + 3, base + 1);
               else ind.push(base, base + 1, base + 2, base + 2, base + 1, base + 3);
@@ -432,27 +472,35 @@ export function buildChunkGeometry(world: World, cx: number, cz: number) {
             ao.push(AO[occ]);
           }
           let k = 0;
+          const isWater = id === B.WATER;
+          const sink = isWater && (y + 1 >= H || world.get(wx, y + 1, wz) !== B.WATER) ? 0.12 : 0;
+          const tree = id === B.LOG || id === B.LEAVES;
           for (const c of F.c) {
             const X = ox + x + c[0], Y = y + c[1], Z = oz + z + c[2];
-            if (nat) smoothOffset(world, X, Y, Z, off); else off[0] = off[1] = off[2] = 0;
-            pos.push(X + off[0], Y + off[1], Z + off[2]);
+            if (nat) smoothOffset(world, X, Y, Z, off);
+            else if (tree) treeOffset(world, X, Y, Z, id, off);
+            else off[0] = off[1] = off[2] = 0;
+            pos.push(X + off[0], Y + off[1] - (c[1] ? sink : 0), Z + off[2]);
             const u = (tc + (c[3] ? 1 - eps : eps)) / ATLAS_COLS;
             const v = 1 - (tr + 1 - (c[4] ? 1 - eps : eps)) / ATLAS_COLS;
             uv.push(u, v);
             // foliage scatters light through itself, so its undersides never go pitch black
-            const l = id === B.LEAVES ? 0.9 + 0.1 * F.s * ao[k++] + 0.25 : (0.82 + 0.18 * F.s) * ao[k++];
+            const l = isWater ? 1 : id === B.LEAVES ? 0.9 + 0.1 * F.s * ao[k++] + 0.25 : (0.82 + 0.18 * F.s) * ao[k++];
             col.push(l, l, l);
           }
+          const out = isWater ? wind : ind;
           // flip quad diagonal to avoid anisotropic AO artifacts
-          if (ao[0] + ao[3] < ao[1] + ao[2]) ind.push(base, base + 1, base + 3, base, base + 3, base + 2);
-          else ind.push(base, base + 1, base + 2, base + 2, base + 1, base + 3);
+          if (!isWater && ao[0] + ao[3] < ao[1] + ao[2]) out.push(base, base + 1, base + 3, base, base + 3, base + 2);
+          else out.push(base, base + 1, base + 2, base + 2, base + 1, base + 3);
         }
       }
   const g = new THREE.BufferGeometry();
   g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
   g.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
-  g.setIndex(ind);
+  g.setIndex(ind.concat(wind));
+  g.addGroup(0, ind.length, 0);
+  g.addGroup(ind.length, wind.length, 1);
   g.computeVertexNormals();
   g.computeBoundingSphere();
   return g;

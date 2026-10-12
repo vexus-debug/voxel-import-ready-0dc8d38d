@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import * as THREE from "three";
-import { B } from "./blocks";
+import { B, isPassable } from "./blocks";
 import { World, type Edits } from "./world";
 
 const SAVE_KEY = "voxelcraft-save-v1";
@@ -73,8 +73,12 @@ export function getGame(): Game {
   }
   const seed = saved?.seed ?? Math.floor(Math.random() * 1e9);
   const world = new World(seed, (saved?.edits as Edits) ?? {});
-  const spawn = new THREE.Vector3(8.5, world.surface(8, 8) + 0.5, 8.5);
-  const pos = saved?.pos ? new THREE.Vector3(...saved.pos) : spawn.clone();
+  const [sx, sy, sz] = world.findDry(8, 8);
+  const spawn = new THREE.Vector3(sx + 0.5, sy + 0.5, sz + 0.5);
+  let pos = saved?.pos ? new THREE.Vector3(...saved.pos) : spawn.clone();
+  // never resume inside water or terrain
+  const here = world.get(Math.floor(pos.x), Math.floor(pos.y), Math.floor(pos.z)) ?? 0;
+  if (here === B.WATER || (here !== 0 && !isPassable(here))) pos = spawn.clone();
   if (saved) {
     ui.health = saved.health ?? MAX_HEALTH;
     ui.counts = { ...ui.counts, ...saved.counts };
