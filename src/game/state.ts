@@ -77,7 +77,7 @@ export function getGame(): Game {
   const spawn = new THREE.Vector3(sx + 0.5, sy + 0.5, sz + 0.5);
   let pos = saved?.pos ? new THREE.Vector3(...saved.pos) : spawn.clone();
   // never resume inside water or terrain
-  const here = world.get(Math.floor(pos.x), Math.floor(pos.y), Math.floor(pos.z));
+  const here = world.get(Math.floor(pos.x), Math.floor(pos.y), Math.floor(pos.z)) ?? 0;
   if (here === B.WATER || (here !== 0 && !isPassable(here))) pos = spawn.clone();
   if (saved) {
     ui.health = saved.health ?? MAX_HEALTH;
